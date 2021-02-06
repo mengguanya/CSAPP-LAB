@@ -1,0 +1,4 @@
+#!/bin/bash
+rm *.o
+make
+./mdriver -f short3-bal.rep
