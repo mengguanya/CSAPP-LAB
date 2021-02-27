@@ -1,9 +1,6 @@
 #include <stdio.h>
-#include "csapp.h"
-/* Recommended max cache and object sizes */
-#define MAX_CACHE_SIZE 1049000
-#define MAX_OBJECT_SIZE 102400
-
+#include "./csapp.h"
+#include "./cache.h"
 /* You won't lose style points for including this long line in your code */
 static const char *user_agent_hdr = "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:10.0.3) Gecko/20120305 Firefox/10.0.3\r\n";
 static const char *conn_hdr = "Connection: close\r\n";
@@ -14,7 +11,7 @@ static const char *requestlint_hdr_format = "GET %s HTTP/1.0\r\n";
 static const char *endof_hdr = "\r\n";
 
 static const char *connection_key = "Connection";
-static const char *user_agent_key= "User-Agent";
+static const char *user_agent_key = "User-Agent";
 static const char *proxy_connection_key = "Proxy-Connection";
 static const char *host_key = "Host";
 
@@ -43,6 +40,10 @@ int main(int argc, char **argv)
         exit(1);
     }
 
+    Signal(SIGPIPE, SIG_IGN);
+    /* 初始化cache */
+    InitCache();
+
     /* 代理服务器开始监听客户端的请求 */
     listenfd = Open_listenfd(argv[1]);
 
@@ -59,12 +60,13 @@ int main(int argc, char **argv)
         printf("Accepted connection from (%s, %s)\n", hostname, port);
 
         /* 创建线程，参数分别是线程号，线程属性，线程执行的函数，传递给线程函数的参数*/
-        Pthread_create(&tid,NULL,thread_func,(void *)connfd);
+        Pthread_create(&tid, NULL, thread_func, (void *)connfd);
     }
     return 0;
 }
 /* 代理服务器响应每个客户机请求的线程 */
-void *thread_func(void *vargp){
+void *thread_func(void *vargp)
+{
     int connfd = (int)vargp;
     /* 把线程设置为分离的 */
     Pthread_detach(pthread_self());
@@ -95,6 +97,15 @@ void doit(int connfd)
         return;
     }
 
+    /* 在解析uri之前访问cache，如果cache中缓存有该uri对应的文件则直接返回即可 */
+    char uri_buffer[MAXLINE];
+    strcpy(uri_buffer, uri);
+
+    if (ReadCache(uri_buffer, connfd) == 1)
+    {
+        return;
+    }
+
     /*parse the uri to get hostname,file path ,port*/
     parse_uri(uri, hostname, path, &port);
 
@@ -115,13 +126,25 @@ void doit(int connfd)
     Rio_writen(endserver_fd, endserver_httphdr, strlen(endserver_httphdr));
 
     /*receive message from end server and send to the client*/
-    size_t n;
+    char   obj_buffer[MAX_OBJECT_SIZE];
+    size_t buf_size = 0;
+    size_t n = 0;
     while ((n = Rio_readlineb(&to_endserver, buf, MAXLINE)) != 0)
     {
+        buf_size += n;
         printf("proxy received %ld bytes,then send\n", n);
+        if(buf_size < MAX_OBJECT_SIZE){
+            strcat(obj_buffer, buf);
+        }
         Rio_writen(connfd, buf, n);
     }
+
     Close(endserver_fd);
+
+    /* 如果文件不大于缓存大小上限，则写cache */
+    if(buf_size < MAX_OBJECT_SIZE){
+        WriteCache(uri_buffer, obj_buffer);
+    }
 }
 
 /* parse the uri to get hostname,file path ,port */
@@ -226,4 +249,3 @@ void clienterror(int fd, char *cause, char *errnum,
     Rio_writen(fd, buf, strlen(buf));
     Rio_writen(fd, body, strlen(body));
 }
-
